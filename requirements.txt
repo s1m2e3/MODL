@@ -1,0 +1,7 @@
+kagglehub
+torch
+numpy
+pytorch-minimize
+box2d
+pygame
+gym
