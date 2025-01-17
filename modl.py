@@ -1,36 +1,34 @@
 import torch
 from torchmin import minimize_constr
-
-def collect_gradients(loss,model):
-
+def collect_gradients(loss, model, subset=None):
     """
-    Collects gradients of the loss with respect to each parameter of the model.
+    Collect gradients of the loss with respect to a subset of parameters.
 
     Parameters
     ----------
-    fun_loss : function
-        The loss function to use.
-    fun_prediction : function
-        The prediction function to use.
+    loss : torch.Tensor
+        The computed loss for which gradients are calculated.
     model : torch.nn.Module
         The model to compute gradients for.
-    x : Tuple
-        The input.
-    y : torch.Tensor
-        The target.
+    subset : list, optional
+        A list of parameter names for which to collect gradients. If None, gradients for all parameters are collected.
 
     Returns
     -------
     gradients : dict
         A dictionary where the keys are the parameter names and the values are the gradients.
     """
-
+    torch.autograd.set_detect_anomaly(True)
     gradients = {}
+    # If subset is None, collect gradients for all parameters
+    subset = set(subset) if subset is not None else None
     for name, param in model.named_parameters():
-        grads = torch.autograd.grad(loss, param, retain_graph=True,allow_unused=True)[0]
-        if grads is not None:
-            gradients[name]=grads
+        if subset is None or name in subset:
+            grads = torch.autograd.grad(loss, param, retain_graph=True, allow_unused=True)[0]
+            if grads is not None:
+                gradients[name] = grads.clip(-0.5, 0.5)
     return gradients
+
 
 def optimized_gradient(list_of_gradients):
     """
@@ -79,7 +77,7 @@ def collect_non_zero_gradients(dictionary_of_gradients,name):
 def get_average_gradients(gradients,model):
     return torch.stack(gradients).to(model.device).sum(dim=0)/len(gradients)
 
-def get_coordinated_lambda(dictionary_of_gradients,model):
+def get_coordinated_lambda(dictionary_of_gradients,model,coordinated=True):
 
     """
     Calculates coordinated lambda values for model parameters based on gradients.
@@ -113,9 +111,9 @@ def get_coordinated_lambda(dictionary_of_gradients,model):
             tuples = [torch.dot(gradients[i].flatten(),gradients[j].flatten())<0 
                           for i in range(len(gradients)) 
                           for j in range(len(gradients)) if i!=j ] 
-            if any(tuples):
+            if any(tuples) and coordinated:
                 lambdas[name] = optimized_gradient(gradients)
-                print('optimizing lambda for {}'.format(name))
+                print('Optimized Lambda')
             else:
                 lambdas[name] = get_average_gradients(gradients,model)
                 
@@ -124,9 +122,15 @@ def get_coordinated_lambda(dictionary_of_gradients,model):
         
     return lambdas 
 
-def gradient_descent_step(lambdas,model,learning_rate):
-    for name, param in model.named_parameters():
-        if name in lambdas:
-            lambdas[name] = torch.reshape(lambdas[name],param.shape)
-            param.data -= learning_rate*lambdas[name]
+def gradient_descent_step(lambdas,model,optimizer,comparison_loss=1):
+    with torch.no_grad():
+        for name, param in model.named_parameters():
+            if name in lambdas:
+                lambdas[name] = torch.reshape(lambdas[name],param.shape)
+                param.grad = lambdas[name]
+                if comparison_loss <= 0.01:
+                    param.data -= param.grad*1e-3
+                    param.grad = None
+                
+    optimizer.step()
     return model
