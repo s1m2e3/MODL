@@ -27,6 +27,30 @@ def train_for_controls_value(model,prev_states_step,next_states_step,rewards,bou
 #     return gradients
 
 def train_for_differences(model,prev_states_step,next_states_step,actions_step,bounds):
+    """
+    Trains the model by computing the gradients for the difference in state predictions.
+
+    Parameters
+    ----------
+    model : object
+        The model to be trained, with methods for forward propagation of state differences.
+    prev_states_step : torch.Tensor
+        The tensor containing the previous states for each step in the sequence.
+    next_states_step : torch.Tensor
+        The tensor containing the next states following each previous state.
+    actions_step : torch.Tensor
+        The tensor containing actions taken at each step.
+    bounds : float
+        The bounds used to constrain the model's predictions.
+
+    Returns
+    -------
+    gradients : dict
+        A dictionary of gradients for the parameters of the model's RNN1 network.
+    loss_differences : float
+        The computed loss value for the differences in state trajectories.
+    """
+
     actions_step = actions_step.to(device=model.device).float()
     outputs = model.forward_states_differences(prev_states_step[:,0,:].unsqueeze(0), actions_step, actions_step.shape[1],bounds)
     differences = next_states_step - prev_states_step
@@ -37,6 +61,30 @@ def train_for_differences(model,prev_states_step,next_states_step,actions_step,b
     return gradients, loss_differences.detach().cpu().numpy().item()
 
 def train_for_states(model,prev_states_step,next_states_step,actions_step,bounds):
+    """
+    Trains the model by computing the gradients for the states.
+
+    Parameters
+    ----------
+    model : object
+        The model to be trained, with methods for forward propagation of states.
+    prev_states_step : torch.Tensor
+        The tensor containing the previous states for each step in the sequence.
+    next_states_step : torch.Tensor
+        The tensor containing the next states following each previous state.
+    actions_step : torch.Tensor
+        The tensor containing actions taken at each step.
+    bounds : float
+        The bounds used to constrain the model's predictions.
+
+    Returns
+    -------
+    gradients : dict
+        A dictionary of gradients for the parameters of the model's RNN1 network.
+    loss_states : float
+        The computed loss value for the states.
+    """
+    
     actions_step = actions_step.to(device=model.device).float()
     outputs = model.forward_states_from_actions(prev_states_step[:,0,:].unsqueeze(0), actions_step, actions_step.shape[1],bounds)
     loss_states = states_trajectory_loss(next_states_step.to(model.device),outputs)
@@ -47,6 +95,35 @@ def train_for_states(model,prev_states_step,next_states_step,actions_step,bounds
 
 
 def run_and_train(model,num_episodes,env,num_steps,num_rewards,k,boolean,num_epochs,optimizer):
+    """
+    Runs simulations and trains the model on the generated trajectories.
+
+    Parameters
+    ----------
+    model : object
+        The model to be trained.
+    num_episodes : int
+        The number of episodes to run the simulation for.
+    env : object
+        The OpenAI Gym environment to be used.
+    num_steps : int
+        The maximum number of steps to run the simulation for.
+    num_rewards : list
+        A list to store the number of rewards collected in each episode.
+    k : int
+        The index in the num_rewards list to use for the current episode.
+    boolean : bool
+        A boolean indicating whether to use the value function or not.
+    num_epochs : int
+        The number of epochs to train the model for.
+    optimizer : object
+        The optimizer to use for training the model.
+
+    Returns
+    -------
+    num_rewards : list
+        The updated list of rewards collected in each episode.
+    """
     epsilon = 0.9
     max_len = 0
     stored_trajectory = []
