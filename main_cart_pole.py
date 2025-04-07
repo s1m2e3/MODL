@@ -9,7 +9,8 @@ from gym.wrappers.record_video import RecordVideo
 from modl import collect_gradients, optimized_gradient, get_coordinated_lambda, gradient_descent_step
 import torch
 from utils.sequence_rl import value_trajectory_loss, states_trajectory_loss, difference_trajectory_loss
-
+from utils.sequence_rl import compute_returns,proximal_policy_optimization_gradient_loss,policy_entropy_loss,policy_value_loss
+import random
 def train_for_controls_value(model,prev_states_step,next_states_step,rewards,bounds,rewards_bounds):
     outputs = model.forward_values_sequence(prev_states_step[:,0,:].unsqueeze(0),prev_states_step.shape[1],bounds,rewards_bounds*1.5)
     loss_value = value_trajectory_loss(rewards.unsqueeze(2).to(model.device),outputs,rewards.shape[1],1)
@@ -130,50 +131,93 @@ def run_and_train(model,num_episodes,env,num_steps,num_rewards,k,boolean,num_epo
     stored_steps = [] 
     bounds = None
     rewards_bounds = None
-    for i in range(num_episodes):
-        prev_states, next_states, rewards, actions,epsilon,stored_steps= run_sim(env,model, num_steps,epsilon,stored_steps,optimizer)
+    num_steps_ = 0
+    for i in range(10000):
+        prev_states, next_states, rewards, actions,epsilon,stored_steps,old_probs = run_sim(env,model, num_steps,epsilon,stored_steps,optimizer)
+        num_steps_ += len(prev_states)
         if len(rewards)>5:
-            stored_trajectory.append([prev_states, next_states, rewards, actions,epsilon])
+            stored_trajectory.append([prev_states, next_states, rewards, actions,epsilon,old_probs])
         num_rewards[k][i] = len(rewards)
-        max_len = 5 if len(next_states)>5 else len(next_states)
-                
         print('in episode {} we did {} steps'.format(i,len(next_states)))
         print("boolean is:",boolean)
         print('taken actions were:', actions)
         print("epsilon is:",epsilon)
-        if len(rewards)>max_len:
-            max_len = len(rewards)
-        if len(stored_trajectory)>50:
-            idx = np.random.choice(len(stored_trajectory),num_epochs if len(stored_trajectory)>num_epochs else len(stored_trajectory),replace=False)
-            min_len_trajectory = min([torch.stack(stored_trajectory[i][0][-(max_len-k):]).shape[0] for i in idx])
-            prev_states_step = torch.stack([torch.stack(stored_trajectory[i][0][-min_len_trajectory:]) for i in idx]).squeeze(2).squeeze(2)
-            next_states_step = torch.stack([torch.stack(stored_trajectory[i][1][-min_len_trajectory:]) for i in idx]).squeeze(2).squeeze(2)
-            rewards_step = torch.stack([torch.tensor(stored_trajectory[i][2][-min_len_trajectory:]) for i in idx])
-            actions_step = torch.stack([torch.tensor(stored_trajectory[i][3][-min_len_trajectory:]) for i in idx]).unsqueeze(2)
-            if bounds is None:
-                bounds = torch.max(next_states_step - prev_states_step,dim=0).values.max(dim=0).values
-            elif bounds is not None:
-                new_bounds = torch.max(next_states_step - prev_states_step, dim=0).values.max(dim=0).values
-                bounds = torch.max(bounds, new_bounds)
-            if rewards_bounds is None:
-                rewards_bounds = torch.max(rewards_step,dim=0).values.max(dim=0).values
-            elif rewards_bounds is not None:
-                new_rewards_bounds = torch.max(rewards_step,dim=0).values.max(dim=0).values
-                rewards_bounds = torch.max(rewards_bounds, new_rewards_bounds)
-            for _ in range(100):
+        if num_steps_>2048:
+            for j in range(32):
+                idx = np.random.choice(len(stored_trajectory),64 if len(stored_trajectory)>64 else len(stored_trajectory),replace=False)
+                min_len_trajectory = min([len(stored_trajectory[i][0]) for i in idx])
+                prev_states_step = torch.stack([torch.stack(stored_trajectory[i][0][-min_len_trajectory:]) for i in idx]).squeeze(2).squeeze(2)
+                next_states_step = torch.stack([torch.stack(stored_trajectory[i][1][-min_len_trajectory:]) for i in idx]).squeeze(2).squeeze(2)
+                old_probs = torch.stack([torch.stack(stored_trajectory[i][5][-min_len_trajectory:]) for i in idx]).squeeze(2).squeeze(2)
+                rewards_step = torch.stack([torch.tensor(stored_trajectory[i][2][-min_len_trajectory:]) for i in idx])
+                actions_step = torch.stack([torch.tensor(stored_trajectory[i][3][-min_len_trajectory:]) for i in idx]).unsqueeze(2)
+                accumulated_rewards = torch.stack(compute_returns(rewards_step,0.7)).float().unsqueeze(2)
                 
-                gradients_states,loss_states = train_for_states(model,prev_states_step,next_states_step,actions_step,bounds)
-                gradients_differences,loss_differences = train_for_differences(model,prev_states_step,next_states_step,actions_step,bounds)
-                if loss_states>0.5:
-                    lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences},model,False)
-                elif loss_states<0.1:
-                    gradients_value,loss_value = train_for_controls_value(model,prev_states_step,next_states_step,rewards_step,bounds,rewards_bounds)
-                    print(gradients_value)
-                    lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences,3:gradients_value},model,True)
-                else:
-                    lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences},model,True)
-                # lambdas = get_coordinated_lambda({1:gradients_differences},model,False)
-                model = gradient_descent_step(lambdas,model,optimizer,loss_states)
+                for i in range(5):
+                    optimizer.zero_grad()
+                    values = model.forward_value(next_states_step).squeeze(1).float()
+                    probs = model.forward_probs(next_states_step).squeeze(1)
+                    loss_policy = proximal_policy_optimization_gradient_loss(probs,old_probs,values,accumulated_rewards.to(model.device)).to(model.device)
+                    
+                    loss_entropy = policy_entropy_loss(probs).to(model.device)
+                    loss_value = policy_value_loss(values,accumulated_rewards.to(model.device)).to(model.device)
+                    names = ["V_value_3.weight",
+                            "V_policy_3.weight","V_value_2.weight",
+                            "V_policy_2.weight","V_value_1.weight",
+                            "V_policy_1.weight"]
+                    
+                    if random.random()>0.7:
+                        print(loss_policy,loss_entropy,loss_value)
+                        gradients_policy = collect_gradients(loss_policy,model,names)
+                        gradients_entropy = collect_gradients(loss_entropy,model,names)
+                        gradients_value = collect_gradients(loss_value,model,names)
+                        lambdas = get_coordinated_lambda({1:gradients_policy,2:gradients_entropy,3:gradients_value},model,True )
+                        
+                    else:
+                        total_loss = loss_policy + loss_entropy + loss_value
+                    # total_loss.backward(retain_graph=True)
+                    # optimizer.step()
+                        print(total_loss)
+                        names = ["V_value_3.weight",
+                            "V_policy_3.weight","V_value_2.weight",
+                           
+                            "V_policy_2.weight","V_value_1.weight",
+                            
+                            "V_policy_1.weight"]
+                        gradients_loss = collect_gradients(total_loss,model,names)
+                        lambdas = get_coordinated_lambda({1:gradients_loss},model,False )
+                    model = gradient_descent_step(lambdas,model,optimizer)  
+                    print("Updated model")
+                # else:
+                #     total_loss = loss_policy + loss_entropy + loss_value
+                #     total_loss.backward(retain_graph=True)
+                #     optimizer.step()
+                
+                
+            # if bounds is None:
+            #     bounds = torch.max(next_states_step - prev_states_step,dim=0).values.max(dim=0).values
+            # elif bounds is not None:
+            #     new_bounds = torch.max(next_states_step - prev_states_step, dim=0).values.max(dim=0).values
+            #     bounds = torch.max(bounds, new_bounds)
+            # if rewards_bounds is None:
+            #     rewards_bounds = torch.max(rewards_step,dim=0).values.max(dim=0).values
+            # elif rewards_bounds is not None:
+            #     new_rewards_bounds = torch.max(rewards_step,dim=0).values.max(dim=0).values
+            #     rewards_bounds = torch.max(rewards_bounds, new_rewards_bounds)
+            # for _ in range(100):
+                
+            #     gradients_states,loss_states = train_for_states(model,prev_states_step,next_states_step,actions_step,bounds)
+            #     gradients_differences,loss_differences = train_for_differences(model,prev_states_step,next_states_step,actions_step,bounds)
+            #     if loss_states>0.5:
+            #         lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences},model,False)
+            #     elif loss_states<0.1:
+            #         gradients_value,loss_value = train_for_controls_value(model,prev_states_step,next_states_step,rewards_step,bounds,rewards_bounds)
+            #         print(gradients_value)
+            #         lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences,3:gradients_value},model,True)
+            #     else:
+            #         lambdas = get_coordinated_lambda({1:gradients_states,2:gradients_differences},model,True)
+            #     # lambdas = get_coordinated_lambda({1:gradients_differences},model,False)
+            #     model = gradient_descent_step(lambdas,model,optimizer,loss_states)
                 # for j in range(min_len_trajectory):
                        # outputs_V = model.forward_value(prev_states_step[:,j,:]).max(dim=1).values.unsqueeze(1)
                         # outputs_V_at_n_step = model.forward_value(prev_states_step[:,min_len_trajectory-1,:]).max(dim=1).values.unsqueeze(1)
@@ -182,7 +226,8 @@ def run_and_train(model,num_episodes,env,num_steps,num_rewards,k,boolean,num_epo
                         # gradients[j]=collect_gradients(loss=loss_value,model=model)
                         # lambdas = get_coordinated_lambda([grads_states,grads_values],model)         
                         # prev_states, next_states, rewards, actions,epsilon= run_sim(env,model, num_steps,epsilon,seq_len=10)
-                
+            num_steps_=0  
+            stored_trajectory = []      
     return num_rewards
 
 def main(env_name, num_steps=1000,num_episodes=100,learning_rate = 1e-4,num_epochs = 4):
@@ -195,12 +240,12 @@ def main(env_name, num_steps=1000,num_episodes=100,learning_rate = 1e-4,num_epoc
     for boolean in [True,False]:
         num_rewards = {}
         for k in length:
-            model = InterdependentResidualRNN(input_size1=1, hidden_size1=state_dim, 
+            model_ = InterdependentResidualRNN(input_size1=1, hidden_size1=state_dim, 
                                               input_size2=state_dim, hidden_size2=actions_dim,hidden_output_1 = 32,hidden_output_2=32)
             # Initialize Adam optimizer
-            optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+            optimizer = torch.optim.Adam(model_.parameters(), lr=0.01)
             num_rewards[k] = {}
-            num_rewards = run_and_train(model,num_episodes,env,num_steps,num_rewards,k,boolean,num_epochs,optimizer)               
+            num_rewards = run_and_train(model_,num_episodes,env,num_steps,num_rewards,k,boolean,num_epochs,optimizer)               
                        
         num_rewards = pd.DataFrame(num_rewards)
         for i in num_rewards.columns:

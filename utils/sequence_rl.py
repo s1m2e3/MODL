@@ -114,7 +114,7 @@ def value_trajectory_loss(rewards,V,n,gamma):
     
     return loss_metric
 
-def compute_returns(rewards, gamma=0.99):
+def compute_returns(rewards, gamma=0.9):
     returns = []
     G = 0
     for reward in reversed(rewards):
@@ -122,10 +122,22 @@ def compute_returns(rewards, gamma=0.99):
         returns.insert(0, G)
     return returns
 
-def policy_gradient_loss(probs,V,accumulated_rewards):
+def proximal_policy_optimization_gradient_loss(probs,old_probs,V,accumulated_rewards,clip_epsilon=0.2):
+    
     log_probs = torch.log(probs+1e-8)
+    old_log_probs = torch.log(old_probs+1e-8)
+    ratio = torch.exp(log_probs-old_log_probs)
     advantage = accumulated_rewards - V
-    policy_loss = -torch.sum(log_probs*advantage)
+    unclipped_loss = ratio*advantage
+    clipped_ratio = torch.clamp(ratio,1-clip_epsilon,1+clip_epsilon)
+    clipped_loss = clipped_ratio*advantage
+    ratio_copy = ratio.clone().detach().cpu().numpy()
+    clipped_ratio_copy = clipped_ratio.clone().detach().cpu().numpy()
+
+    clipped_indexes = (ratio_copy > clipped_ratio_copy)
+    unclipped_loss[clipped_indexes] = unclipped_loss[clipped_indexes]-unclipped_loss[clipped_indexes] + clipped_loss[clipped_indexes]
+    policy_loss = -torch.sum(unclipped_loss)
+
     return policy_loss
 
 def policy_entropy_loss(probs):

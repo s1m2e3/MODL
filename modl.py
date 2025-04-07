@@ -1,5 +1,7 @@
 import torch
 from torchmin import minimize_constr
+
+torch.autograd.set_detect_anomaly(True)
 def collect_gradients(loss, model, subset=None):
     """
     Collect gradients of the loss with respect to a subset of parameters.
@@ -24,9 +26,11 @@ def collect_gradients(loss, model, subset=None):
     subset = set(subset) if subset is not None else None
     for name, param in model.named_parameters():
         if subset is None or name in subset:
+            param.grad = None
             grads = torch.autograd.grad(loss, param, retain_graph=True, allow_unused=True)[0]
             if grads is not None:
-                gradients[name] = grads.clip(-0.5, 0.5)
+                gradients[name] = grads.clip(-1, 1)
+        
     return gradients
 
 
@@ -70,8 +74,9 @@ def collect_non_zero_gradients(dictionary_of_gradients,name):
     gradients = []
     for i in dictionary_of_gradients:
         if name in dictionary_of_gradients[i]:
-            if dictionary_of_gradients[i][name].abs().sum() > 0:
-                gradients.append(dictionary_of_gradients[i][name])
+            if dictionary_of_gradients[i][name] is not None:
+                if dictionary_of_gradients[i][name].abs().sum() > 0:
+                    gradients.append(dictionary_of_gradients[i][name])
     return gradients
 
 def get_average_gradients(gradients,model):
@@ -113,7 +118,7 @@ def get_coordinated_lambda(dictionary_of_gradients,model,coordinated=True):
                           for j in range(len(gradients)) if i!=j ] 
             if any(tuples) and coordinated:
                 lambdas[name] = optimized_gradient(gradients)
-                print('Optimized Lambda')
+                # print('Optimized Lambda')
             else:
                 lambdas[name] = get_average_gradients(gradients,model)
                 
@@ -123,14 +128,19 @@ def get_coordinated_lambda(dictionary_of_gradients,model,coordinated=True):
     return lambdas 
 
 def gradient_descent_step(lambdas,model,optimizer,comparison_loss=1):
+    for name, param in model.named_parameters():
+        if name in lambdas:
+            lambdas[name] = torch.reshape(lambdas[name],param.shape).detach()
     with torch.no_grad():
         for name, param in model.named_parameters():
             if name in lambdas:
-                lambdas[name] = torch.reshape(lambdas[name],param.shape)
                 param.grad = lambdas[name]
-                if comparison_loss <= 0.01:
-                    param.data -= param.grad*1e-3
-                    param.grad = None
-                
-    optimizer.step()
+                # # param.grad.copy_(lambdas[name])
+                # if comparison_loss == 1:
+                #     param.data -= param.grad*1e-3
+                #     param.grad = None
+                # # else:
+
+        optimizer.step()
+        optimizer.zero_grad()
     return model
