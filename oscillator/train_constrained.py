@@ -59,7 +59,7 @@ for init_conditions in range(30):
             # lower_bound_constraints_rhs_big_M = torch.stack([lower_bound_state,lower_bound_control,upper_bound_velocity_big_M])
             
             # lower_bound_constraints = -u-lower_bound_constraints_rhs_big_M
-            lower_bound_constraints = -u+lower_bound_constraints_rhs
+            lower_bound_constraints = -u+lower_bound_constraints_rhs    
             # print(lower_bound_constraints_rhs)
             normalized_constraints = torch.vstack([upper_bound_constraints,lower_bound_constraints])
             

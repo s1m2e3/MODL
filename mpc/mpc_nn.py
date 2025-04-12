@@ -24,27 +24,23 @@ class NStepResidualRNNController(ResidualRNNController):
     def __init__(self, state_dim, hidden_dim, output_dim, n_steps=1):
         super().__init__(state_dim, hidden_dim, output_dim)
         self.n_steps = min(n_steps,5)
-        self.rnn = [nn.RNN(state_dim, hidden_dim, batch_first=True) for _ in range(n_steps)]
-        self.fc = [nn.Linear(hidden_dim, output_dim) for _ in range(n_steps)]
+        self.rnn = nn.ModuleList([nn.RNN(state_dim, hidden_dim, batch_first=True) for _ in range(n_steps)])
+        self.fc = nn.ModuleList([nn.Linear(hidden_dim, output_dim) for _ in range(n_steps)])
     
     def forward(self, x, h_prev):
         if self.n_steps >= 1:
-            h_res_list = []
+            h_out_list = []
+            u_list = []
             control_outputs = []
 
             for i in range(self.n_steps):
-                h_out, _ = self.rnn[i](x.unsqueeze(1), h_prev)
-
-                if i == 0:
-                    h_res = h_out + h_prev[0]
-                else:
-                    # Compute weighted sum using binomial coefficients
-                    coeffs = torch.tensor([math.comb(i, k) for k in range(i+1)])  # Pascal's triangle row
-                    residual_sum = sum(c * h_res_list[-(k+1)] for k, c in enumerate(coeffs[:-1]))
-                    h_res = h_out + h_prev[0] + residual_sum
-
-                h_res_list.append(h_res)
-                u = self.fc[0](h_res).squeeze(1)
+                h_out, _ = self.rnn[i](x.unsqueeze(0), h_prev)
+                h_out = h_out[0]
+                h_out_list.append(h_out)
+                h_out_tensor= torch.stack(h_out_list).squeeze(1)
+                coeffs = torch.tensor([math.comb(i+1, k) for k in range(i+1)]).unsqueeze(1)  # Pascal's triangle row
+                h_res = (h_out_tensor*coeffs).sum(dim=0).unsqueeze(0) + h_prev[0]
+                u = self.fc[i](h_res).squeeze(0)
                 control_outputs.append(u)
-
+        
         return torch.stack(control_outputs), _

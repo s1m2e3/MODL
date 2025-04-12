@@ -31,7 +31,6 @@ for init_conditions in range(30):
         for t in range(T_horizon):
             # Generate control from RNN
             u, h = rnn_controller(x.unsqueeze(0), h)
-            
             # Simulate next state using ODE solver
             list_u.append(u.squeeze(1))
             x_next = system_dynamics(x, u)
@@ -46,7 +45,7 @@ for init_conditions in range(30):
         optimizer.step()
         prev = torch.stack(list_x).detach().numpy()
         prev_u = torch.stack(list_u).detach().numpy()
-        if epoch == 99:
+        if epoch % 10 == 0 :
             print(f"Epoch {epoch}, Loss: {total_loss.item()}")
         
 
