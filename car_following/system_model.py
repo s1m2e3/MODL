@@ -43,6 +43,27 @@ def angle_change_positive_upper_bound(x_target,x,u,binary_angle_change_positive,
 
     return angle_change_positive
 
+def car_following_estimation(x,x_target,desired_headway,target_speed,accel_max,minimum_spacing=0.01):
+    position_x, position_y, velocity, angle, _ = x
+    position_x_target, position_y_target, _, angle_target, _ = x_target
+    deceleration = accel_max/2
+    
+    position_modulus = (position_x**2+position_y**2)**(1/2)
+    position_modulus_target = (position_x_target**2+position_y_target**2)**(1/2)
+    delta_s = position_modulus_target-position_modulus
+    delta_velocity = velocity
+    ratio_velocity = velocity/target_speed
+    s_star = minimum_spacing+velocity*desired_headway+velocity*delta_velocity/(2*(accel_max*deceleration)**(1/2))
+    print(ratio_velocity,s_star/delta_s)
+    return accel_max*(1-(ratio_velocity)**4-(s_star/delta_s)**2)
+
+def car_following_upper_bound(car_following,binary_car_following,big_m=10.0):
+    return car_following+big_m*binary_car_following
+
+def car_following_lower_bound(car_following,binary_car_following,big_m=10.0):
+    return car_following-big_m*(1-binary_car_following)
+
+
 def binary_minimum_acceleration(x,speed_target,ratio_desired_speed=0.5):
     _, _, velocity, _, _ = x
     
