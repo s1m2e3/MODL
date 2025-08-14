@@ -1,130 +1,240 @@
 # Define the system dynamics function (e.g., a simple mass-spring-damper system)
 import torch
 
-# Define cost function
-def cost_function_state_following(x,x_target,lambda_x=1, u=torch.tensor([0]),u_target=torch.tensor([0]),lambda_u=torch.tensor([0])):
-    """ Penalize deviation from zero state and large control inputs """
-    return lambda_x*torch.sum((x-x_target)**2) + lambda_u*torch.sum((u-u_target)**2)
 
-def binary_angle_change_positive(x,x_target,dt=0.1,l=1,steepness=5):
-    '''If the difference in angle is greater than zero, the change in angle is greater than zero, 
-    and if the difference in angle is less than zero, the change in angle is less than zero'''
+
+class BaseSympyModule(torch.nn.Module):
+    def __init__(self, f,  default_v1=0.0, default_v2=0.0, default_delta1=0.0, default_delta2=0.0):
+        super().__init__()
+        self.f = f
+        # register defaults as buffers so scripting can see them
+        self.register_buffer('default_v1', torch.tensor(default_v1))
+        self.register_buffer('default_v2', torch.tensor(default_v2))
+        self.register_buffer('default_delta1', torch.tensor(default_delta1))
+        self.register_buffer('default_delta2', torch.tensor(default_delta2))
+
+    def forward(self,
+                x0:   torch.Tensor,
+                y0:   torch.Tensor,
+                theta0:   torch.Tensor,
+                v0:   torch.Tensor,
+                delta0:   torch.Tensor,
+                
+               ) -> torch.Tensor:
+        # now call the positional lambdified function
+        device = x0.device
+        nested = self.f(x0.to(device),y0.to(device),theta0.to(device),v0.to(device),delta0.to(device))
+        # nested is a list-of-lists-of (Tensor OR int)
+        rows = []
+        for row in nested:
+            # convert any int/float → Tensor on the right device/dtype
+            trow = [
+                e if torch.is_tensor(e)
+                  else torch.as_tensor(e, dtype=x0.dtype, device=x0.device)
+                for e in row
+            ]
+            
+            rows.append(torch.stack(trow, dim=0))
+        return torch.stack(rows, dim=-2).to(device)
+
+class SympyFuncModule(BaseSympyModule):
+    def __init__(self, f, default_x_target=0.0, default_y_target=0.0, default_theta_target=0.0,**kwargs):
+        super().__init__(f, **kwargs)
+        self.register_buffer('default_x_target', torch.tensor(default_x_target))
+        self.register_buffer('default_y_target', torch.tensor(default_y_target))
+        self.register_buffer('default_theta_target', torch.tensor(default_theta_target))
+
+    def forward(self,
+                x0:   torch.Tensor,
+                y0:   torch.Tensor,
+                theta0:   torch.Tensor,
+                v0:   torch.Tensor,
+                delta0:   torch.Tensor,
+                x_target:   torch.Tensor,
+                y_target:   torch.Tensor,
+                theta_target:   torch.Tensor,
+                v1:   torch.Tensor = None,
+                v2:   torch.Tensor = None,
+                delta1:   torch.Tensor = None,
+                delta2:   torch.Tensor = None,
+                
+               ) -> torch.Tensor:
+        device = x0.device
+        # if y or z weren’t passed, fill from the buffers (and match x’s shape)            
+        if v1 is None:
+            v1 = self.default_v1.expand_as(x0)
+        if v2 is None:
+            v2 = self.default_v2.expand_as(x0)
+        if delta1 is None:
+            delta1 = self.default_delta1.expand_as(x0)
+        if delta2 is None:
+            delta2 = self.default_delta2.expand_as(x0)
+        # now call the positional lambdified function
+        nested = self.f(x0.to(device),y0.to(device),theta0.to(device),v0.to(device),delta0.to(device),
+                        x_target.to(device),y_target.to(device),theta_target.to(device),v1.to(device),
+                        v2.to(device),delta1.to(device),delta2.to(device))
         
-    _, _, velocity, angle_ego, delta = x
-    velocity = torch.relu(velocity)
-    _, _, _, angle_target, _ = x_target
+        if torch.is_tensor(nested):
+            return nested.to(device)
+        # nested is a list-of-lists-of (Tensor OR int)
+        rows = []
+        for row in nested:
+            # convert any int/float → Tensor on the right device/dtype
+            trow = [
+                e if torch.is_tensor(e)
+                  else torch.as_tensor(e, dtype=x0.dtype, device=x0.device)
+                for e in row
+            ]
+            
+            rows.append(torch.stack(trow, dim=0))
+        return torch.stack(rows, dim=-2).to(device)
+        
+class SympyConsModule(BaseSympyModule):
+    def __init__(self, f, default_x10=0.0, default_y10=0.0,**kwargs):
+        super().__init__(f, **kwargs)
+        self.register_buffer('default_x10', torch.tensor(default_x10))
+        self.register_buffer('default_y10', torch.tensor(default_y10))
+
+        
+    def forward(self,
+                x0:   torch.Tensor,
+                y0:   torch.Tensor,
+                theta0:   torch.Tensor,
+                v0:   torch.Tensor,
+                delta0:   torch.Tensor,
+                x10:   torch.Tensor = None,
+                y10:   torch.Tensor = None,
+                v1:   torch.Tensor = None,
+                v2:   torch.Tensor = None,
+                delta1:   torch.Tensor = None,
+                delta2:   torch.Tensor = None,
+
+               ) -> torch.Tensor:
+        device = x0.device
+        # if y or z weren’t passed, fill from the buffers (and match x’s shape)
+        if x10 is None:
+            x10 = self.default_x10.expand_as(x0)
+        if y10 is None:
+            y10 = self.default_y10.expand_as(x0)
+        if v1 is None:
+            v1 = self.default_v1.expand_as(x0)
+        if v2 is None:
+            v2 = self.default_v2.expand_as(x0)
+        if delta1 is None:
+            delta1 = self.default_delta1.expand_as(x0)
+        if delta2 is None:
+            delta2 = self.default_delta2.expand_as(x0)
+        # now call the positional lambdified function
+        nested = self.f(x0.to(device),y0.to(device),theta0.to(device),v0.to(device),delta0.to(device),
+                        x10.to(device),y10.to(device),v1.to(device),v2.to(device),delta1.to(device),delta2.to(device))
+        # nested is a list-of-lists-of (Tensor OR int)
+        rows = []
+        for row in nested:
+            # convert any int/float → Tensor on the right device/dtype
+            trow = [
+                e if torch.is_tensor(e)
+                  else torch.as_tensor(e, dtype=x0.dtype, device=x0.device)
+                for e in row
+            ]
+            rows.append(torch.stack(trow, dim=0))
+        return torch.stack(rows, dim=-2).to(device)
+
+def quadratic_loss(s, u, s_target,control_penalty=0.00001,dt=0.1,l=1):
     
-    return steepness*(angle_target-(angle_ego+(velocity/l*torch.tan(delta))))
-
-def binary_angle_change_negative(x,x_target):
-    '''If the difference in angle is greater than zero, the change in angle is greater than zero, 
-    and if the difference in angle is less than zero, the change in angle is less than zero'''
-
-    _, _,_, angle_ego, _ = x
-    _, _, _, angle_target, _ = x_target
+    v,delta = u[0,:]
+    x_target, y_target, theta_target = s_target[0,:]
+    new_s = system_dynamics(s,u)
     
-    return -(angle_target-angle_ego)
+    new_x,new_y,new_theta = new_s[0],new_s[1],new_s[2,:]
+    f = (x_target-new_x)**2+(y_target-new_y)**2+(theta_target-new_theta)**2+control_penalty*(v**2+delta**2)
+    return f
 
-def angle_change_positive_lower_bound(x,u,binary_angle_change_positive,l=1.0,big_m=10.0,dt=0.01):
-    _, _, velocity, _, steering_angle = x
-    acceleration, _ = u
+def constraint_max_speed_upper_bound(v,v_max=30.0):
+    return v-v_max
+def constraint_max_speed_lower_bound(v,v_max=0.0):
+    return -v-v_max
+def constraint_max_acceleration_upper_bound(v,v_prev,a_max=3.0,dt=0.1):
+    return (v-v_prev)/dt-a_max
+def constraint_max_acceleration_lower_bound(v,v_prev,a_max=3.0,dt=0.1):
+    return (-v+v_prev)/dt-a_max
+def constraint_max_centrifugal_upper_bound(v,delta,l=1,a_centrifugal_max=10):
+    return torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max
+def constraint_max_centrifugal_lower_bound(v,delta,l=1,a_centrifugal_max=10):
+    print('inside the constraint')
+    print(v,delta)
+    print('neagtive poower of speed',-torch.pow(v,2))
+    print('tan of the steering angle',torch.tan(delta))
+    print('tan of the steering gauged by the lenght of the car',torch.tan(delta)/l)
+    print('constraint violation',-torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max)
+    print('outside the constraint')
+    return -torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max
+
+def constraint_max_steering_upper_bound(delta,delta_max=0.9):
+    return delta-delta_max
+def constraint_max_steering_lower_bound(delta,delta_max=0.9):
+    return -delta-delta_max
+def heuristic_turn_right(delta,delta_gap):
+    return -delta*(1+torch.sign(delta_gap))
+def heuristic_turn_left(delta,delta_gap):
+    return delta*(1-torch.sign(delta_gap))
+
+def update(constraint,control,fix=0.1):
+    if constraint>1:
+        return control + fix
+
+def fix_speed(speed,prev_speed):
+    constraints = constraints_vector_speed(speed,prev_speed)
+    fixes = [0.05,-0.05,-0.05,0.05]
+    while (constraints>1).any().item():
+        speed = update(constraints.max().item(),speed,fix=fixes[constraints.argmax().item()])
+        constraints = constraints_vector_speed(speed,prev_speed)
     
-    return -big_m*(1-binary_angle_change_positive)-steering_angle
-
-def positive_velocity(x):
-    _, _, velocity, _, _ = x
-    return -velocity
-
-def angle_change_positive_upper_bound(x_target,x,u,binary_angle_change_positive,l=1.0,big_m=10.0,dt=0.01):
-    _, _,_, angle_target, _ = x_target
-    _, _, velocity, angle, steering_angle = x
-    velocity = torch.relu(velocity)
-    acceleration, _ = u
-    angle_delta = angle_target-angle
-    inner_term = torch.atan(((angle_delta)*l*dt)/(velocity+1e-3))
+    return speed
+def fix_steering(steering,delta_gap):
+    constraints = constraints_vector_steering(steering,delta_gap)
+    fixes = [0.05,-0.05,0.05,-0.05]
     
-    angle_change_positive = (inner_term-steering_angle+big_m*(1-binary_angle_change_positive))
-
-    return angle_change_positive
-
-def car_following_estimation(x,x_target,desired_headway,target_speed,accel_max,minimum_spacing=0.01):
-    position_x, position_y, velocity, angle, _ = x
-    position_x_target, position_y_target, _, angle_target, _ = x_target
-    deceleration = accel_max/2
-    
-    position_modulus = (position_x**2+position_y**2)**(1/2)
-    position_modulus_target = (position_x_target**2+position_y_target**2)**(1/2)
-    delta_s = position_modulus_target-position_modulus
-    delta_velocity = velocity
-    ratio_velocity = velocity/target_speed
-    s_star = minimum_spacing+velocity*desired_headway+velocity*delta_velocity/(2*(accel_max*deceleration)**(1/2))
-    return accel_max*(1-(ratio_velocity)**4-(s_star/delta_s)**2)
-
-def car_following_upper_bound(car_following,binary_car_following,big_m=10.0):
-    return car_following+big_m*binary_car_following
-
-def car_following_lower_bound(car_following,binary_car_following,big_m=10.0):
-    return car_following-big_m*(1-binary_car_following)
+    while (constraints>1).any().item():
+        steering = update(constraints.max().item(),steering,fix=fixes[constraints.argmax().item()])
+        constraints = constraints_vector_steering(steering,delta_gap)
+    return steering
 
 
-def binary_minimum_acceleration(x,speed_target,ratio_desired_speed=0.5):
-    _, _, velocity, _, _ = x
-    
-    return ratio_desired_speed-velocity/speed_target
+def constraints_vector(u_curr,u_prev):
+        # pack all six constraints into one tensor to avoid many small host syncs
+        c = torch.stack((
+            torch.exp(0.05*constraint_max_speed_lower_bound(u_curr[0,0])),
+            torch.exp(0.05*constraint_max_speed_upper_bound(u_curr[0,0])),
+            torch.exp(0.05*constraint_max_acceleration_upper_bound(u_curr[0,0], u_prev[0,0])),
+            torch.exp(0.05*constraint_max_acceleration_lower_bound(u_curr[0,0], u_prev[0,0])),
+            torch.exp(0.05*constraint_max_centrifugal_lower_bound(u_curr[0,0], u_curr[0,1])),
+            torch.exp(0.05*constraint_max_centrifugal_upper_bound(u_curr[0,0], u_curr[0,1])),
+            torch.exp(0.05*constraint_max_steering_lower_bound(u_curr[0,1])),
+            torch.exp(0.05*constraint_max_steering_upper_bound(u_curr[0,1])),
+        ))
+        return c
 
-def steering_like_previous_upper_bound(steering_angle_prev,binary_angle_change_positive,big_m=10.0):
-    return steering_angle_prev+big_m*(binary_angle_change_positive)
+def constraints_vector_speed(speed_curr,speed_prev):
+        # pack all six constraints into one tensor to avoid many small host syncs
+        c = torch.stack((
+            torch.exp(1.5*constraint_max_speed_lower_bound(speed_curr)),
+            torch.exp(1.5*constraint_max_speed_upper_bound(speed_curr)),
+            torch.exp(1.5*constraint_max_acceleration_upper_bound(speed_curr, speed_prev)),
+            torch.exp(1.5*constraint_max_acceleration_lower_bound(speed_curr, speed_prev)),
+        ))
+        return c
 
-def steering_like_previous_lower_bound(steering_angle_prev,binary_angle_change_positive,big_m=10.0):
-    return steering_angle_prev-big_m*(1-binary_angle_change_positive)
-
-def minimum_acceleration(binary_minimum_acceleration,minimum_acceleration=0.3,big_m=10.0):
-    return minimum_acceleration-big_m*(1-binary_minimum_acceleration)
-
-def steering_angle_difference_upper_bound(steering_rate_prev,control_bound):
-    return steering_rate_prev+control_bound
-def steering_angle_difference_lower_bound(steering_rate_prev,control_bound):
-    return steering_rate_prev-control_bound
-def acceleration_difference_upper_bound(acceleration_prev,control_bound):
-    return acceleration_prev+control_bound
-def acceleration_difference_lower_bound(acceleration_prev,control_bound):
-    return acceleration_prev-control_bound
-
-def angle_change_negative_upper_bound(x,u,binary_angle_change_positive,l=1.0,big_m=10.0,dt=0.01):
-    _, _, velocity, _, steering_angle = x
-    velocity = torch.relu(velocity)
-    
-    return big_m*(binary_angle_change_positive)-steering_angle
-
-def angle_change_negative_lower_bound(x_target,x,u,binary_angle_change_positive,l=1.0,big_m=10.0,dt=0.01):
-    _, _,_, angle_target, _ = x_target
-    _, _, velocity, angle, steering_angle = x
-    velocity = torch.relu(velocity)
-    acceleration, _ = u
-    angle_delta = angle_target-angle
-    inner_term = torch.atan(((angle_delta)*l*dt)/(velocity+1e-3))
-    
-    angle_change_negative = (inner_term-steering_angle)-big_m*(binary_angle_change_positive)
-
-    return angle_change_negative
+def constraints_vector_steering(steering,delta_gap):
+        # pack all six constraints into one tensor to avoid many small host syncs
+        c = torch.stack((
+            torch.exp(1.5*constraint_max_steering_lower_bound(steering)),
+            torch.exp(1.5*constraint_max_steering_upper_bound(steering)),
+            torch.exp(1.5*heuristic_turn_right(steering,delta_gap)),
+            torch.exp(1.5*heuristic_turn_left(steering,delta_gap)),
+        ))
+        return c
 
 
-def steering_angle_rate_upper_bound(u,steering_angle_rate_bound):
-    _, steering_angle_rate = u
-    return steering_angle_rate_bound
-
-
-def steering_angle_rate_lower_bound(u,steering_angle_rate_bound):
-    _, steering_angle_rate = u
-    return -steering_angle_rate_bound
-
-def acceleration_upper_bound(u,acceleration_bound):
-    acceleration, _ = u
-    return acceleration_bound
-
-def acceleration_lower_bound(u,acceleration_bound):
-    acceleration,_ = u
-    return -acceleration_bound
 
 def system_dynamics(x, u, dt=0.1,l=1.0):
     """ x = [position_x, position_y,velocity, angle,stering_angle], u = [acceleration,steering_angle_rate] """
