@@ -31,6 +31,10 @@ def angle_change_positive_lower_bound(x,u,binary_angle_change_positive,l=1.0,big
     
     return -big_m*(1-binary_angle_change_positive)-steering_angle
 
+def positive_velocity(x):
+    _, _, velocity, _, _ = x
+    return -velocity
+
 def angle_change_positive_upper_bound(x_target,x,u,binary_angle_change_positive,l=1.0,big_m=10.0,dt=0.01):
     _, _,_, angle_target, _ = x_target
     _, _, velocity, angle, steering_angle = x
@@ -54,7 +58,6 @@ def car_following_estimation(x,x_target,desired_headway,target_speed,accel_max,m
     delta_velocity = velocity
     ratio_velocity = velocity/target_speed
     s_star = minimum_spacing+velocity*desired_headway+velocity*delta_velocity/(2*(accel_max*deceleration)**(1/2))
-    print(ratio_velocity,s_star/delta_s)
     return accel_max*(1-(ratio_velocity)**4-(s_star/delta_s)**2)
 
 def car_following_upper_bound(car_following,binary_car_following,big_m=10.0):
@@ -126,21 +129,18 @@ def acceleration_lower_bound(u,acceleration_bound):
 def system_dynamics(x, u, dt=0.1,l=1.0):
     """ x = [position_x, position_y,velocity, angle,stering_angle], u = [acceleration,steering_angle_rate] """
     
-    position_x, position_y, velocity, angle, steering_angle = x
-    acceleration, steering_angle_rate = u
-    if abs(acceleration.item()) < 0.01:
-        acceleration = torch.relu(acceleration)
-    position_x = position_x + velocity*torch.sin(angle) * dt
-    position_y = position_y + velocity*torch.cos(angle) * dt
-    angle = angle + velocity*torch.tan(steering_angle)/l * dt
-    velocity = velocity + acceleration*dt
-    steering_angle = steering_angle + steering_angle_rate * dt
+    position_x, position_y, angle = x[0,:]
+    speed, steering = u[0,:]
     
-    return torch.stack([position_x, position_y, velocity, angle, steering_angle]).unsqueeze(0)
+    position_x = position_x + speed*torch.sin(angle) * dt
+    position_y = position_y + speed*torch.cos(angle) * dt
+    angle = angle + speed*torch.tan(steering)/l * dt
+    
+    return torch.stack([position_x, position_y, angle]).unsqueeze(1)
 
 
 def get_random_target_state(x,max_change_x,min_change_x,max_change_y,min_change_y,min_change_angle,max_change_angle):
-    position_x, position_y,_, angle, _ = x
+    position_x, position_y, angle = x
 
     sign_angle = 1 if torch.rand(1).item() < 0.5 else -1
     curve = True
@@ -153,12 +153,11 @@ def get_random_target_state(x,max_change_x,min_change_x,max_change_y,min_change_
     delta_y_min = min_change_y *sign_y
     delta_y_max = max_change_y*torch.rand(1) * sign_y
     
-
-    new_position_x = position_x + max(delta_x_min,delta_x_max)
-    new_position_y = position_y + max(delta_y_min,delta_y_max)
+    new_position_x = position_x + delta_x_max
+    new_position_y = position_y + delta_y_max
     new_angle = torch.atan(new_position_x/new_position_y)
     
-    return torch.stack([new_position_x,new_position_y,torch.tensor([0]),new_angle,torch.tensor([0])])
+    return torch.stack([new_position_x,new_position_y,new_angle])
     
 def get_inertial_target_state(x,target):
     return x-target
