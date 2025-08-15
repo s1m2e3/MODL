@@ -61,19 +61,35 @@ def wolfe_line_search_torch(f, xk, gk,
     """
     
     pk = -gk
-    phi_0 = f(xk[0],xk[1]).sum().item()+f(xk[0],xk[1]).max().item()
-    phi_prime_0 = torch.dot(gk, pk).item()
-
+    
+    if len(xk)==3:
+        phi_0 = f(xk[0],xk[1],xk[2]).item()
+        phi_prime_0 = torch.dot(gk.squeeze(0).squeeze(0), pk.squeeze(0).squeeze(0)).item()
+    
+    else:
+        phi_0 = f(xk[0],xk[1]).sum().item()+f(xk[0],xk[1]).max().item()
+        phi_prime_0 = torch.dot(gk, pk).item()
+    
     assert phi_prime_0 < 0, "Negative gradient must be a descent direction."
     alpha = alpha_init
 
     for _ in range(max_iter):
-        x_new = xk[0] + alpha * pk
-        phi_alpha = f(x_new,xk[1]).sum().item()+f(x_new,xk[1]).max().item()
-        grad_new = torch.autograd.functional.jacobian(f,(x_new,xk[1]))[0].squeeze(1)
-        grad_new_steer = grad_new[f(x_new,xk[1]).argmax().item()].clamp(-grad_clamp,grad_clamp) 
-        grad_new = grad_new.sum()+grad_new_steer
-        phi_prime_alpha = torch.dot(grad_new, pk).item()
+        
+        if len(xk)==3:
+            
+            x_new = xk[1] + alpha * pk.squeeze(0)
+            phi_alpha =  f(xk[0],x_new,xk[2]).item()
+            grad_new = torch.autograd.functional.jacobian(f,(xk[0],x_new,xk[2]))[1].squeeze(1)
+            phi_prime_alpha = torch.dot(grad_new.squeeze(0), pk.squeeze(0).squeeze(0)).item()
+        
+        else:
+            x_new = xk[0] + alpha * pk
+        
+            phi_alpha = f(x_new,xk[1]).sum().item()+f(x_new,xk[1]).max().item()
+            grad_new = torch.autograd.functional.jacobian(f,(x_new,xk[1]))[0].squeeze(1)
+            grad_new_steer = grad_new[f(x_new,xk[1]).argmax().item()].clamp(-grad_clamp,grad_clamp) 
+            grad_new = grad_new.sum()+grad_new_steer
+            phi_prime_alpha = torch.dot(grad_new, pk).item()
         
         # Wolfe conditions
         if phi_alpha > phi_0 + c1 * alpha * phi_prime_0:
@@ -100,3 +116,5 @@ def store_json(filename, data):
     """
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
+def soft_clip(x, max_val=1e8):
+    return max_val * torch.tanh(x / max_val)

@@ -139,14 +139,14 @@ class SympyConsModule(BaseSympyModule):
             rows.append(torch.stack(trow, dim=0))
         return torch.stack(rows, dim=-2).to(device)
 
-def quadratic_loss(s, u, s_target,control_penalty=0.00001,dt=0.1,l=1):
+def quadratic_loss(s, u, s_target,control_penalty=0.01,dt=0.1,l=1):
     
     v,delta = u[0,:]
     x_target, y_target, theta_target = s_target[0,:]
     new_s = system_dynamics(s,u)
     
     new_x,new_y,new_theta = new_s[0],new_s[1],new_s[2,:]
-    f = (x_target-new_x)**2+(y_target-new_y)**2+(theta_target-new_theta)**2+control_penalty*(v**2+delta**2)
+    f = (x_target-new_x)**2+(y_target-new_y)**2+(theta_target-new_theta)**2+control_penalty*(v**2+delta**2*100)
     return f
 
 def constraint_max_speed_upper_bound(v,v_max=30.0):
@@ -159,14 +159,7 @@ def constraint_max_acceleration_lower_bound(v,v_prev,a_max=3.0,dt=0.1):
     return (-v+v_prev)/dt-a_max
 def constraint_max_centrifugal_upper_bound(v,delta,l=1,a_centrifugal_max=10):
     return torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max
-def constraint_max_centrifugal_lower_bound(v,delta,l=1,a_centrifugal_max=10):
-    print('inside the constraint')
-    print(v,delta)
-    print('neagtive poower of speed',-torch.pow(v,2))
-    print('tan of the steering angle',torch.tan(delta))
-    print('tan of the steering gauged by the lenght of the car',torch.tan(delta)/l)
-    print('constraint violation',-torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max)
-    print('outside the constraint')
+def constraint_max_centrifugal_lower_bound(v,delta,l=1,a_centrifugal_max=10):   
     return -torch.pow(v,2)*torch.tan(delta)/l-a_centrifugal_max
 
 def constraint_max_steering_upper_bound(delta,delta_max=0.9):
@@ -203,14 +196,14 @@ def fix_steering(steering,delta_gap):
 def constraints_vector(u_curr,u_prev):
         # pack all six constraints into one tensor to avoid many small host syncs
         c = torch.stack((
-            torch.exp(0.05*constraint_max_speed_lower_bound(u_curr[0,0])),
-            torch.exp(0.05*constraint_max_speed_upper_bound(u_curr[0,0])),
-            torch.exp(0.05*constraint_max_acceleration_upper_bound(u_curr[0,0], u_prev[0,0])),
-            torch.exp(0.05*constraint_max_acceleration_lower_bound(u_curr[0,0], u_prev[0,0])),
-            torch.exp(0.05*constraint_max_centrifugal_lower_bound(u_curr[0,0], u_curr[0,1])),
-            torch.exp(0.05*constraint_max_centrifugal_upper_bound(u_curr[0,0], u_curr[0,1])),
-            torch.exp(0.05*constraint_max_steering_lower_bound(u_curr[0,1])),
-            torch.exp(0.05*constraint_max_steering_upper_bound(u_curr[0,1])),
+            torch.exp(0.005*constraint_max_speed_lower_bound(u_curr[0,0])),
+            torch.exp(0.005*constraint_max_speed_upper_bound(u_curr[0,0])),
+            torch.exp(0.005*constraint_max_acceleration_upper_bound(u_curr[0,0], u_prev[0,0])),
+            torch.exp(0.005*constraint_max_acceleration_lower_bound(u_curr[0,0], u_prev[0,0])),
+            torch.exp(0.005*constraint_max_centrifugal_lower_bound(u_curr[0,0], u_curr[0,1])),
+            torch.exp(0.005*constraint_max_centrifugal_upper_bound(u_curr[0,0], u_curr[0,1])),
+            torch.exp(0.005*constraint_max_steering_lower_bound(u_curr[0,1])),
+            torch.exp(0.005*constraint_max_steering_upper_bound(u_curr[0,1])),
         ))
         return c
 
@@ -229,8 +222,8 @@ def constraints_vector_steering(steering,delta_gap):
         c = torch.stack((
             torch.exp(1.5*constraint_max_steering_lower_bound(steering)),
             torch.exp(1.5*constraint_max_steering_upper_bound(steering)),
-            torch.exp(1.5*heuristic_turn_right(steering,delta_gap)),
-            torch.exp(1.5*heuristic_turn_left(steering,delta_gap)),
+            # torch.exp(1.5*heuristic_turn_right(steering,delta_gap)),
+            # torch.exp(1.5*heuristic_turn_left(steering,delta_gap)),
         ))
         return c
 
@@ -242,8 +235,8 @@ def system_dynamics(x, u, dt=0.1,l=1.0):
     position_x, position_y, angle = x[0,:]
     speed, steering = u[0,:]
     
-    position_x = position_x + speed*torch.sin(angle) * dt
-    position_y = position_y + speed*torch.cos(angle) * dt
+    position_x = position_x + speed*torch.cos(angle) * dt
+    position_y = position_y + speed*torch.sin(angle) * dt
     angle = angle + speed*torch.tan(steering)/l * dt
     
     return torch.stack([position_x, position_y, angle]).unsqueeze(1)

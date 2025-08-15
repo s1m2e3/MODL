@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from mpc.mpc_nn import NStepResidualRNNController,ResidualRNNController
 from system_model import system_dynamics,get_random_target_state,constraints_vector,quadratic_loss,\
                         constraints_vector_speed,constraints_vector_steering
-from utils import CommandLineArgs,wolfe_line_search_torch,store_json
+from utils import CommandLineArgs,wolfe_line_search_torch,store_json,soft_clip
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -63,40 +63,42 @@ for init_condition in range(n_init_conditions):
         x = x_init.to(device).float().requires_grad_(True)
         x_target = x_target.float().requires_grad_(True)
         u_prev = torch.zeros(2).unsqueeze(0).to(device).float().requires_grad_(True)
-        h = torch.ones(1, 1, output_dim).to(device).float().requires_grad_(True)  # Initial hidden state for RNN     
+        h = torch.zeros(1, 1, output_dim).to(device).float().requires_grad_(True)  # Initial hidden state for RNN     
         param_list = [p for p in rnn_controller.parameters() if p.requires_grad]        
         loss = 0
-        
+        u_init = u_prev
         for epoch in range(n_trajectory_steps):
             simulation_stats[init_condition][trajectory_optimization][epoch] = {}
-            print(epoch,trajectory_optimization)
-            pred, h,sat_loss = rnn_controller(x-x_target, h)
-            pred= pred.squeeze(0)
-            u = u_prev + pred.squeeze(0)
-            if 'guided' in weights_name:
-                u_init = u.clone()
-                print('u init before any constraining',u_init)
-                simulation_stats[init_condition][trajectory_optimization][epoch]['u_init'] = u_init.detach().cpu().numpy().tolist()
+            print('trajectory:',trajectory_optimization,'epoch:',epoch)
+            
+            pred, h,sat_loss = rnn_controller(x-x_target, u_prev.unsqueeze(0))
+            print('new h',h)
+            print('\n\n')
+            u = pred.squeeze(0)
+            
+            u_init = u.clone()
+            print('u init before any constraining',u_init)
+            simulation_stats[init_condition][trajectory_optimization][epoch]['u_init'] = u_init.detach().cpu().numpy().tolist()
+            constraints = constraints_vector_speed(u[0,0],u_prev[0,0])
+            fixes = [0.05,-0.05,-0.05,0.05]
+            
+            while (constraints>1).any().item() :
+                u[0,0]= u[0,0] + fixes[constraints.argmax().item()]
                 constraints = constraints_vector_speed(u[0,0],u_prev[0,0])
-                fixes = [0.05,-0.05,-0.05,0.05]
-                counter = 0
-                while (constraints>1).any().item() or counter < 50:
-                    u[0,0]= u[0,0] + fixes[constraints.argmax().item()]
-                    constraints = constraints_vector_speed(u[0,0],u_prev[0,0])
-                    counter += 1
-                    
+                
+            constraints = constraints_vector_steering(u[0,1],x_target[0,2]-x[0,2])
+            fixes = [0.05,-0.05]
+            
+            while (constraints>1).any().item():
+                u[0,1]= u[0,1] + fixes[constraints.argmax().item()]
                 constraints = constraints_vector_steering(u[0,1],x_target[0,2]-x[0,2])
-                fixes = [0.05,-0.05,0.05,-0.05]
-                counter = 0
-                while (constraints>1).any().item() or counter < 50:
-                    u[0,1]= u[0,1] + fixes[constraints.argmax().item()]
-                    constraints = constraints_vector_steering(u[0,1],x_target[0,2]-x[0,2])
-                    counter += 1
+
+            if 'guided' in weights_name:
                     
                 c= constraints_vector(u,u_prev)
                 counter = 0
                 while torch.any(c>1.0).item() and counter < 10:
-                    
+                    print('in first gradeint constrainning loop')
                     cons_update_steer = torch.autograd.functional.jacobian(constraints_vector,(u,u_prev))[0].\
                         squeeze(1)
                     cons_update = cons_update_steer.sum(0).clamp(-grad_clamp,grad_clamp)
@@ -111,40 +113,49 @@ for init_condition in range(n_init_conditions):
                         step_size_alignment
                     )
                     cons_update = cons_update_steer+cons_update
-                    u=  u-step_size_alignment*(cons_update.clamp(-grad_clamp,grad_clamp))
+                    u=  u-step_size_alignment*(cons_update.clamp(-grad_clamp*0.01,grad_clamp*0.01))
                     c = constraints_vector(u,u_prev) 
                     counter += 1
                     
-                print('before gradient heuristic',u)
                 for i in range(n_steps_alignment):
                     
                     loss_func_update = torch.autograd.functional.jacobian(quadratic_loss,(x.float().requires_grad_(True),\
                                                                                             u.float().requires_grad_(True),\
                                                                                             x_target.float().requires_grad_(True)))[1]
+                    step_size_alignment = wolfe_line_search_torch(
+                        quadratic_loss,
+                        (x.float().requires_grad_(True),
+                        u.float().requires_grad_(True),
+                        x_target.float().requires_grad_(True)),
+                        loss_func_update.clamp(-grad_clamp,grad_clamp),
+                        step_size_alignment
+                    )
                     
-                    u = u-0.1*(loss_func_update[:,0].clamp(-grad_clamp,grad_clamp))
-                print('after gradient heuristic')
-                print(u)
+                    loss_func_update[:,0][0,0]=loss_func_update[:,0][0,0].clamp(-grad_clamp,grad_clamp)
+                    loss_func_update[:,0][0,1]=loss_func_update[:,0][0,1].clamp(-0.1*grad_clamp,0.1*grad_clamp)
+                    u = u-step_size_alignment*(loss_func_update[0])
+                    
                 constraints = constraints_vector_speed(u[0,0],u_prev[0,0])
                 fixes = [0.05,-0.05,-0.05,0.05]
-                counter = 0
-                while (constraints>1).any().item() or counter < 50:
+                
+                while (constraints>1).any().item() :
                     u[0,0]= u[0,0] + fixes[constraints.argmax().item()]
                     constraints = constraints_vector_speed(u[0,0],u_prev[0,0])
                     counter += 1
                     
                 constraints = constraints_vector_steering(u[0,1],x_target[0,2]-x[0,2])
-                fixes = [0.05,-0.05,0.05,-0.05]
-                counter = 0
-                while (constraints>1).any().item() or counter < 50:
+                fixes = [0.05,-0.05]
+                
+                while (constraints>1).any().item() :
+                    
                     u[0,1]= u[0,1] + fixes[constraints.argmax().item()]
+                    
                     constraints = constraints_vector_steering(u[0,1],x_target[0,2]-x[0,2])
-                    counter += 1
                     
                 c= constraints_vector(u,u_prev)
                 counter = 0
                 while torch.any(c>1.0).item() and counter < 10:
-                    
+                    print('in second gradeint constrainning loop')
                     cons_update_steer = torch.autograd.functional.jacobian(constraints_vector,(u,u_prev))[0].\
                         squeeze(1)
                     cons_update = cons_update_steer.sum(0).clamp(-grad_clamp,grad_clamp)
@@ -159,7 +170,7 @@ for init_condition in range(n_init_conditions):
                         step_size_alignment
                     )
                     cons_update = cons_update_steer+cons_update
-                    u=  u-step_size_alignment*(cons_update.clamp(-grad_clamp,grad_clamp))
+                    u=  u-step_size_alignment*(cons_update.clamp(-grad_clamp*0.01,grad_clamp*0.01))
                     c = constraints_vector(u,u_prev)
                     counter +=1 
 
@@ -169,13 +180,21 @@ for init_condition in range(n_init_conditions):
                 
                 simulation_stats[init_condition][trajectory_optimization][epoch]['u_final'] = u_final.detach().cpu().numpy().tolist()
                 simulation_stats[init_condition][trajectory_optimization][epoch]['loss_u'] = loss_u.detach().cpu().numpy().tolist()
+            
+            else:
+
+                u_final = u.clone()
+                loss_u = mse(u_init,u_final)
+                simulation_stats[init_condition][trajectory_optimization][epoch]['u_final'] = u_final.detach().cpu().numpy().tolist()
+                simulation_stats[init_condition][trajectory_optimization][epoch]['loss_u'] = loss_u.detach().cpu().numpy().tolist()
+
 
             if 'guided' in weights_name:
-                constraint_loss = constraints_vector(u_init,u_prev).sum() 
+                constraint_loss = soft_clip(constraints_vector(u,u_prev).sum(),1e6)
                 step_loss = quadratic_loss(x,u_init,x_target)*0.01
                 loss = loss + step_loss + constraint_loss + loss_u + sat_loss
             else:
-                constraint_loss = constraints_vector(u,u_prev).sum()*0.01 
+                constraint_loss = soft_clip(constraints_vector(u,u_prev).sum(),1e6)
                 step_loss = quadratic_loss(x,u,x_target)*0.01
                 loss = loss + step_loss + constraint_loss + sat_loss
             
@@ -183,7 +202,7 @@ for init_condition in range(n_init_conditions):
                 print('in step constraint',constraint_loss)
                 print('in step state loss',step_loss)
                 print(u)
-                print(constraints_vector(u_init,u_prev))
+                # print(constraints_vector(u_init,u_prev))
                 print(constraints_vector(u,u_prev))
                 input('loss too high')
                 break
@@ -207,7 +226,7 @@ for init_condition in range(n_init_conditions):
         
         if loss.item()<1e25:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(rnn_controller.parameters(), max_norm=5.0)
+            torch.nn.utils.clip_grad_norm_(rnn_controller.parameters(), max_norm=1)
             optimizer.step()
 
         optimizer.zero_grad()
