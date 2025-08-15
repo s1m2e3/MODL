@@ -21,14 +21,14 @@ setwd("C:/Users/samil/Documents/MODL/car_following/outputs")
 data_clean <- read.csv("rnn_data_clean.csv")
 data_guided <- read.csv("rnn_data_constrained.csv")
 
-data_clean$iteration_number = as.numeric(data_clean$iteration_number)
-data_guided$iteration_number = as.numeric(data_guided$iteration_number)
+data_clean$trajectory_step = as.numeric(data_clean$trajectory_step)
+data_guided$trajectory_iteration = as.numeric(data_guided$trajectory_iteration)
 
 data_clean$trajectory_step = as.numeric(data_clean$trajectory_step)
-data_guided$trajectory_step = as.numeric(data_guided$trajectory_step)
+data_guided$trajectory_iteration = as.numeric(data_guided$trajectory_iteration)
 
-data_clean = data_clean%>%filter(trajectory_step %% 10 == 0 | trajectory_step == 99)
-data_guided = data_guided%>%filter(trajectory_step %% 10 == 0 | trajectory_step == 99)
+data_clean = data_clean%>%filter(trajectory_iteration %% 10 == 0 | trajectory_iteration == 99)
+data_guided = data_guided%>%filter(trajectory_iteration %% 10 == 0 | trajectory_iteration == 99)
 
 data_clean$source = "unguided"  
 data_guided$source = "guided"
@@ -41,25 +41,34 @@ df_states$element = paste(df_states$concept, df_states$vector_index, sep = "_")
 wide_df_states = pivot_wider(
   data =df_states,
   names_from =element,
-  values_from = value,
-  id_cols = c(trajectory_step,iteration_number,source)
+  values_from = V1,
+  id_cols = c(trajectory_iteration,trajectory_step,source)
 )
-wide_df_states$trajectory_step = as.numeric(wide_df_states$trajectory_step)
-wide_df_states = wide_df_states %>% filter(trajectory_step == 0 |trajectory_step == 10|trajectory_step == 20|trajectory_step == 50| trajectory_step == 90|trajectory_step == 99) 
-wide_df_states <- wide_df_states %>%
-  arrange(trajectory_step, iteration_number)
 
-plot_positions = ggplot(wide_df_states)+geom_line(aes(x=x_1,y=x_2,color=as.factor(trajectory_step)),linewidth=2)+facet_wrap(~source)+
+wide_df_states$trajectory_step = as.numeric(wide_df_states$trajectory_step)
+wide_df_states = wide_df_states %>% filter(trajectory_iteration == 0 |trajectory_iteration == 10|trajectory_iteration == 20|trajectory_iteration == 30|trajectory_iteration == 40|
+                                             trajectory_iteration == 50| trajectory_iteration == 90|trajectory_iteration == 99) 
+wide_df_states <- wide_df_states %>%
+  arrange(trajectory_iteration, trajectory_step)
+
+plot_positions = ggplot(wide_df_states)+geom_line(aes(x=x_1,y=x_2,color=as.factor(trajectory_iteration)),linewidth=2)+facet_wrap(~source)+
   scale_color_brewer(palette="Set3")
-plot_distance = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(iteration_number),y=sqrt((x_1-15)**2+(x_2-15)**2),color=as.factor(trajectory_step)),linewidth=2)+facet_wrap(~source)+
+plot_distance = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=sqrt((x_1-15)**2+(x_2-15)**2),color=as.factor(trajectory_iteration)),linewidth=2)+facet_wrap(~source)+
   scale_color_brewer(palette="Set3")
-plot_speed = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(iteration_number),y=u_1,color=as.factor(trajectory_step)),linewidth=2)+facet_wrap(~source)
-plot_angle = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(iteration_number),y=u_2,color=as.factor(trajectory_step)),linewidth=2)+facet_wrap(~source)
-plot_speed_init = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(iteration_number),y=u_init_1,color=as.factor(trajectory_step)),linewidth=2)
-plot_angle_init = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(iteration_number),y=u_init_2,color=as.factor(trajectory_step)),linewidth=2)
-plot_speed_change = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(iteration_number),y=u_init_1-u_final_1,color=as.factor(trajectory_step)),linewidth=2)
-plot_angle_change = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(iteration_number),y=u_init_2-u_final_2,color=as.factor(trajectory_step)),linewidth=2)+
+plot_angle_distance = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=x_3-0.78,color=as.factor(trajectory_iteration)),linewidth=2)+facet_wrap(~source)+
   scale_color_brewer(palette="Set3")
+plot_speed = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=u_1,color=as.factor(trajectory_iteration)),linewidth=2)+facet_wrap(~source)+
+  scale_color_brewer(palette="Set3")
+plot_angle = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=u_2,color=as.factor(trajectory_iteration)),linewidth=2)+facet_wrap(~source)+
+  scale_color_brewer(palette="Set3")
+plot_speed_init = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(trajectory_step),y=u_init_1,color=as.factor(trajectory_iteration)),linewidth=2)+
+  scale_color_brewer(palette="Set3")
+plot_angle_init = ggplot(wide_df_states%>%filter(source=="guided"))+geom_line(aes(x=as.numeric(trajectory_step),y=u_init_2,color=as.factor(trajectory_iteration)),linewidth=2)+
+  scale_color_brewer(palette="Set3")
+plot_speed_change = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=u_init_1-u_final_1,color=as.factor(trajectory_iteration)),linewidth=2)+
+  scale_color_brewer(palette="Set3")+facet_wrap(~source)
+plot_angle_change = ggplot(wide_df_states)+geom_line(aes(x=as.numeric(trajectory_step),y=u_init_2-u_final_2,color=as.factor(trajectory_iteration)),linewidth=2)+
+  scale_color_brewer(palette="Set3")+facet_wrap(~source)
 
 for (cols in cols_to_plot){
   plot_x = plot_x + geom_point(aes(y =.data[[cols]]),color=my_colors[1])
