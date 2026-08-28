@@ -244,9 +244,10 @@ you run the script.
 
 ## Context
 
-Doctoral dissertation work at the University of Arizona: multi-objective
-gradient-based optimization, gradient-compatible smooth constraining of neural
-network outputs, and model-based deep learning optimal control. Listed under
-Projects as *Multi-Objective Gradient Based Optimization*.
+Doctoral-era work at the University of Arizona. The smooth, gradient-compatible
+constraining of network outputs is the subject of Chapter 4 of the dissertation
+(*Enforcing Constraints in Neural Networks*); the multi-objective optimizer itself
+is not part of the dissertation. Listed under Projects as *Multi-Objective
+Gradient-Based Optimization*.
 
 Author: Samuel Cornejo (<samuelcornejo@arizona.edu>)
